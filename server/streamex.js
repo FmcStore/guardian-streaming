@@ -394,10 +394,12 @@ export async function resolveSources({ kind, id, season, episode, playerId, base
   const d = await call(`/api/streams/${isTv ? 'tv' : 'movie'}/${id}?${q.toString()}`, 240000)
 
   const subs = (d.subtitles || []).map((s) => ({ label: s.label, language: s.language, url: s.url }))
-  const out = []
-  const seen = new Set()
+  const raw = d.sources || []
 
-  for (const s of d.sources || []) {
+  // Kandidat unik dulu: URL mentah yang sama tidak perlu diuji dua kali.
+  const cand = []
+  const seenUrl = new Set()
+  for (const s of raw) {
     // Bentuk sumber berbeda antar player, sudah diperiksa satu per satu:
     //   P1 (vsembed) : { raw, token, playable }  -> `playable` = raw + token (string)
     //   P5 (vidbolt) : { url, quality, headers } -> `playable` = true (boolean)
@@ -406,20 +408,38 @@ export async function resolveSources({ kind, id, season, episode, playerId, base
     const u = (typeof s.playable === 'string' && /^https?:/i.test(s.playable))
       ? s.playable
       : (s.url || s.raw)
-    if (!u || seen.has(u)) continue
-    seen.add(u)
-    const entry = {
+    if (!u || seenUrl.has(u)) continue
+    seenUrl.add(u)
+    cand.push({
       url: u,
       headers: s.headers || {},
       label: s.quality || s.label || 'auto',
       provider: s.providerName || s.provider || '',
       subtitles: subs,
-    }
-    const ok = await probePlaylist(entry)
-    if (!ok) continue
+    })
+  }
+
+  // Diuji paralel (dengan batas) supaya menunggu sebelas sumber tidak berarti
+  // sebelas kali menunggu. Tiap sumber tetap harus lolos sampai segmen pertama,
+  // jadi menambah kecepatan tidak mengendurkan pembuktiannya.
+  const results = await mapLimit(cand, PROBE_CONCURRENCY, probePlaylist)
+
+  const out = []
+  const seenFp = new Set()
+  for (let i = 0; i < cand.length; i++) {
+    const r = results[i]
+    if (!r || !r.ok) continue
+    // Sumber yang strukturnya sama persis sama saja bagi penonton. P1 mengirim
+    // tiga URL berbeda yang ketiganya master playlist dengan varian identik;
+    // tanpa ini muncul tiga tombol "auto" yang harus dicoba satu per satu untuk
+    // hasil yang sama.
+    const fp = r.fingerprint || cand[i].url
+    if (seenFp.has(fp)) continue
+    seenFp.add(fp)
+    const entry = cand[i]
     const token = storeSource(entry)
     out.push({
-      label: entry.label,
+      label: r.label || entry.label,
       provider: entry.provider,
       playlist: `/hls/index.m3u8?t=${token}`,
       subtitles: subs.map((sub) => ({
@@ -435,8 +455,30 @@ export async function resolveSources({ kind, id, season, episode, playerId, base
     playerId: Number(playerId || 5),
     playerName: (d.players || []).find((p) => p.id === Number(playerId || 5))?.name || '',
     sources: out,
-    deadSources: (d.sources || []).length - out.length,
+    deadSources: raw.length - out.length,
   }
+}
+
+/** Berapa sumber yang diuji bersamaan. Cukup cepat tanpa membanjiri hostnya. */
+const PROBE_CONCURRENCY = 4
+
+/** Jalankan fn atas tiap item, paling banyak `limit` sekaligus, urutan tetap. */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length)
+  let next = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = next++
+      if (i >= items.length) return
+      try {
+        out[i] = await fn(items[i])
+      } catch {
+        out[i] = null
+      }
+    }
+  })
+  await Promise.all(workers)
+  return out
 }
 
 /**
@@ -462,7 +504,14 @@ async function probePlaylist(entry) {
   }
   try {
     const top = await grab(entry.url)
-    if (!top || !top.text.includes('#EXTM3U')) return false
+    if (!top || !top.text.includes('#EXTM3U')) return { ok: false }
+
+    // Sidik jari isi playlist, tanpa URL (URL selalu berbeda karena bertoken).
+    // Dipakai untuk membuang sumber yang bagi penonton sama saja.
+    const resList = (top.text.match(/RESOLUTION=(\d+x\d+)/gi) || [])
+      .map((s) => s.split('=')[1].toLowerCase())
+    const codecList = (top.text.match(/CODECS="([^"]+)"/gi) || [])
+      .map((s) => s.slice(8, -1).toLowerCase())
 
     // Master playlist: turuni varian pertama sampai ketemu daftar segmen.
     let media = top
@@ -470,33 +519,35 @@ async function probePlaylist(entry) {
       const variants = top.text.split(/\r?\n/)
         .map((l) => l.trim())
         .filter((l) => l && !l.startsWith('#'))
-      if (!variants.length) return false
+      if (!variants.length) return { ok: false }
       const vurl = safeAbs(variants[0], top.url)
-      if (!vurl) return false
+      if (!vurl) return { ok: false }
       const v = await grab(vurl)
-      if (!v || !v.text.includes('#EXTM3U')) return false
+      if (!v || !v.text.includes('#EXTM3U')) return { ok: false }
       media = v
 
       // H.265 dan Dolby Vision tidak bisa didekode Chrome.
       const codecs = (top.text.match(/CODECS="([^"]+)"/gi) || []).join(',')
-      if (/hvc1|hev1|dvh1|dvhe/i.test(codecs)) return false
+      if (/hvc1|hev1|dvh1|dvhe/i.test(codecs)) return { ok: false }
     }
+
+    const segs = media.text.split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('#'))
 
     // Bukti terakhir: segmen pertama harus benar-benar datang, dan isinya harus
     // data video (TS diawali 0x47, fMP4 memuat ftyp/styp/moof).
-    const seg = media.text.split(/\r?\n/)
-      .map((l) => l.trim())
-      .find((l) => l && !l.startsWith('#'))
-    if (!seg) return false
+    const seg = segs[0]
+    if (!seg) return { ok: false }
     const surl = safeAbs(seg, media.url)
-    if (!surl) return false
+    if (!surl) return { ok: false }
     const r = await fetch(surl, { headers: h, signal: ctrl.signal, redirect: 'follow' })
-    if (!r.ok) return false
+    if (!r.ok) return { ok: false }
     const buf = Buffer.from(await r.arrayBuffer())
-    if (buf.length < 1000) return false
+    if (buf.length < 1000) return { ok: false }
     const isVideo = buf[0] === 0x47
       || /ftyp|styp|moof/.test(buf.subarray(0, 64).toString('latin1'))
-    if (!isVideo) return false
+    if (!isVideo) return { ok: false }
 
     // Codec harus dipastikan dari datanya, bukan dari tag playlist. Sebagian
     // host (Callisto, sudah dibuktikan dengan ffprobe) mengirim H.265 tanpa
@@ -512,16 +563,32 @@ async function probePlaylist(entry) {
         if (ir.ok) {
           const ibuf = Buffer.from(await ir.arrayBuffer())
           const head = ibuf.subarray(0, 8192).toString('latin1')
-          if (/hvc1|hev1|hvcC|dvh1|dvhe/.test(head)) return false
+          if (/hvc1|hev1|hvcC|dvh1|dvhe/.test(head)) return { ok: false }
         }
       }
     } else if (buf[0] === 0x47) {
       // MPEG-TS: stream_type 0x24 di PMT menandakan HEVC.
-      if (tsHasHevc(buf)) return false
+      if (tsHasHevc(buf)) return { ok: false }
     }
-    return true
+
+    // Label yang benar-benar berarti bagi penonton. Tanpa ini, sumber yang tidak
+    // mencantumkan `quality` tampil sebagai "auto", padahal playlist-nya memuat
+    // 640x266 sampai 1920x800: penonton tidak bisa membedakan tombolnya.
+    // Dipakai resolusi varian tertinggi apa adanya, bukan perkiraan kelas.
+    let label = entry.label
+    if (!label || label === 'auto') {
+      const cands = resList
+        .map((r) => r.split('x').map(Number))
+        .filter(([w, h]) => w > 0 && h > 0)
+        .sort((a, b) => b[0] * b[1] - a[0] * a[1])
+      if (cands.length) label = `${cands[0][0]}x${cands[0][1]}`
+    }
+
+    const fp = [resList.slice().sort().join(','), codecList.slice().sort().join(','),
+      segs.length].join('|')
+    return { ok: true, fingerprint: fp, label }
   } catch {
-    return false
+    return { ok: false }
   } finally {
     clearTimeout(timer)
   }

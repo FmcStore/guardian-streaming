@@ -126,6 +126,18 @@ export async function renderPlaylist(desc, token, target, depth = 0) {
         if (/^#EXT-X-(KEY|MAP|PART)/i.test(line)) {
           return `URI="/hls/seg?t=${token}&u=${b64url(abs)}"`
         }
+        // EXT-X-MEDIA menunjuk rendisi, dan rendisi itu bermacam jenis: audio
+        // dan video adalah playlist anak, tapi SUBTITLES adalah berkas WebVTT.
+        // Memperlakukannya sebagai playlist anak membuat browser meminta
+        // subtitle lewat jalur playlist dan menerima 502, yang membuat hls.js
+        // menganggap pemutaran gagal padahal videonya sehat. Jenisnya dibaca
+        // dari atribut TYPE= tag ini, bukan ditebak dari playlist induknya.
+        const tipo = /#EXT-X-MEDIA:/i.test(line)
+          ? (/\bTYPE=([A-Z-]+)/i.exec(line) || [])[1]?.toUpperCase()
+          : null
+        if (tipo === 'SUBTITLES' || tipo === 'CLOSED-CAPTIONS') {
+          return `URI="/hls/seg?t=${token}&u=${b64url(abs)}"`
+        }
         return `URI="${wrapUri(abs, token, isMaster)}"`
       })
     }
@@ -171,6 +183,20 @@ export async function proxySegment(params, res) {
   if (!up.ok) {
     res.writeHead(up.status, { 'Content-Type': 'text/plain' })
     return res.end(`segmen upstream menolak (HTTP ${up.status})`)
+  }
+  // Berkas subtitle juga lewat sini (rendisi EXT-X-MEDIA TYPE=SUBTITLES).
+  // Host media sering mengirimnya sebagai text/plain atau octet-stream, dan
+  // hls.js menolak rendisi subtitle dengan tipe itu. Jadi isinya dipastikan
+  // dan tipenya dibetulkan, sama seperti jalur /sub/.
+  if (/\.(vtt|srt)(\?|$)/i.test(target)) {
+    const raw = await up.text()
+    const body = /\.srt(\?|$)/i.test(target) ? srtToVtt(raw) : raw
+    res.writeHead(200, {
+      'Content-Type': 'text/vtt; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'private, max-age=600',
+    })
+    return res.end(body)
   }
   const ctype = up.headers.get('content-type') || 'video/mp2t'
   const clen = up.headers.get('content-length')

@@ -1,0 +1,18 @@
+[Unit]
+Description=Guardian streaming (streamex-api + proxy HLS)
+After=network.target streamex-api.service
+Wants=streamex-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/streaming-streamex
+Environment=PORT=8810
+Environment=STREAMEX_API=http://127.0.0.1:8798
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=5
+StandardOutput=append:/root/streaming-streamex/server.log
+StandardError=append:/root/streaming-streamex/server.log
+
+[Install]
+WantedBy=default.target

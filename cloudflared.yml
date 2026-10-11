@@ -1,0 +1,13 @@
+# Cloudflare quick tunnel untuk Guardian.
+#
+# Pengaturan yang penting: cloudflared HARUS meneruskan header asli. Halaman
+# player menyusun URL iframe yang absolut dari `x-forwarded-host`/`x-forwarded-proto`
+# (lihat requestOrigin() di server/index.js). Kalau header itu tidak ada, URL
+# player akan menunjuk ke 127.0.0.1 dan iframe tidak akan muncul di browser
+# pengunjung.
+#
+# Tanpa opsi di bawah, quick tunnel hanya meneruskan Host, dan skema HTTPS-nya
+# hilang. Karena itu URL ditebak dari header Host + proto.
+# (cloudflared quick tunnel selalu meneruskan x-forwarded-proto secara default,
+# jadi tidak ada yang perlu dinyalakan secara khusus di sini.)
+no-autoupdate: true

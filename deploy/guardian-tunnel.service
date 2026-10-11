@@ -1,0 +1,15 @@
+[Unit]
+Description=Cloudflare quick tunnel untuk Guardian streaming
+After=network-online.target guardian.service
+Wants=network-online.target guardian.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:8810 --config /root/streaming-streamex/cloudflared.yml --no-autoupdate
+Restart=always
+RestartSec=10
+StandardOutput=append:/root/streaming-streamex/tunnel.log
+StandardError=append:/root/streaming-streamex/tunnel.log
+
+[Install]
+WantedBy=default.target

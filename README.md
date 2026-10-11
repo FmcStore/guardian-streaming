@@ -149,6 +149,26 @@ Variabel lingkungan:
 - `STREAMEX_API` (default `http://127.0.0.1:8798`)
 - `DIST_DIR` (default `dist`)
 
+## Terpasang sebagai layanan
+
+Di mesin ini Guardian sudah jalan sebagai layanan pengguna systemd, jadi tidak
+perlu dijalankan manual:
+
+```bash
+systemctl --user status  guardian.service          # backend, port 8810
+systemctl --user status  guardian-tunnel.service   # quick tunnel Cloudflare
+systemctl --user restart guardian.service
+grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' tunnel.log | tail -1
+```
+
+`guardian.service` memakai `PORT=8810` dan bergantung pada `streamex-api.service`
+(`:8798`) karena semua katalognya datang dari sana.
+
+URL tunnel ditulis ke `tunnel.log`, bukan ke journal, karena `journalctl --user`
+tidak mengeluarkan apa-apa di container ini. Karena quick tunnel mendapat nama
+acak setiap kali restart, alamatnya **bukan** alamat permanen. Untuk alamat tetap,
+pakai named tunnel Cloudflare (`cloudflared tunnel run`), bukan `--url`.
+
 ## Berkas
 
 ```

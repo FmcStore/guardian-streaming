@@ -56,6 +56,7 @@ async function main() {
   const pending = new Map()
   const consoleMsgs = []
   const failedRequests = []
+  const requestById = new Map()
 
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data)
@@ -76,8 +77,14 @@ async function main() {
           || m.params.exceptionDetails.text,
       })
     }
+    if (m.method === 'Network.requestWillBeSent') {
+      requestById.set(m.params.requestId, m.params.request.url)
+    }
     if (m.method === 'Network.loadingFailed') {
-      failedRequests.push(m.params.errorText + ' ' + (m.params.requestId || ''))
+      // Sertakan URL-nya: tanpa itu, "ada permintaan gagal" tidak bisa
+      // ditindaklanjuti karena tidak jelas apa yang gagal.
+      const url = requestById.get(m.params.requestId) || '(url tidak diketahui)'
+      failedRequests.push(`${m.params.errorText} ${url}`)
     }
   }
 
@@ -194,9 +201,16 @@ async function main() {
   check('tidak ada error JS di konsol', errors.length === 0,
         errors.slice(0, 3).map((e) => e.text.slice(0, 90)).join(' ;; '))
   // Kegagalan jaringan pada poster TMDB pihak ketiga bukan cacat kita.
-  const realFails = failedRequests.filter((f) => !/TMDB|image\.tmdb/i.test(f))
+  // ERR_ABORTED juga muncul untuk permintaan yang sengaja dibatalkan hls.js
+  // saat mengganti jalur. Itu pembatalan, bukan permintaan yang ditolak server.
+  const realFails = failedRequests.filter((f) =>
+    !/TMDB|image\.tmdb/i.test(f) && !/ERR_ABORTED/.test(f))
   check('tidak ada permintaan yang gagal', realFails.length === 0,
         realFails.slice(0, 3).join(' ;; '))
+  if (failedRequests.length && !realFails.length) {
+    console.log('    (diabaikan, pembatalan yang disengaja:',
+                failedRequests.length, 'permintaan)')
+  }
 
   console.log()
   console.log('== ' + ok + ' passed, ' + bad + ' failed ==')

@@ -75,13 +75,39 @@ diuji di Chromium sungguhan dan **benar-benar berputar**:
 
 | ID | Nama | Sumber hidup | Hasil uji putar | Catatan |
 |---|---|---|---|---|
-| 1 | vsembed | 3 / 3 | **YA** | 640x266, 8348 dtk; token di-mint sekali per origin, retry saat 429 |
-| 5 | vidbolt | 1 / 11 | **YA** | 640x360, 8352 dtk; fan-out 15 provider, 31 subtitle |
-| 9 | xpass | 2 / 6 | **YA** | 640x266, 8348 dtk; perlu header `Referer: https://play.xpass.top/` |
+| 1 | vsembed | 1 / 3 | **YA** | 640x266, 8348 dtk, label `1920x800`; token di-mint sekali per origin, retry saat 429 |
+| 5 | vidbolt | 1 / 11 | **YA** | 640x360, 8352 dtk, label `1080p`; fan-out 15 provider, 31 subtitle |
+| 9 | xpass | 2 / 6 | **YA** | 640x266, 8348 dtk, label `VIP 1`/`MOL 1`; perlu `Referer: https://play.xpass.top/` |
 
 Sisanya (2, 3, 4, 6, 7, 8, 10, 11, 12) belum punya resolver, jadi **tidak
 ditampilkan** sebagai tombol. Tombol yang tidak bisa apa-apa lebih buruk daripada
 tombol yang tidak ada.
+
+### Tiga jebakan yang harus dilewati supaya tombol server bisa dipercaya
+
+Ketiganya ditemukan lewat pengujian, bukan lewat membaca dokumentasi.
+
+**1. Playlist yang sehat belum berarti bisa diputar.** Sebagian host membalas
+presisi playlist, lalu membalas 403 untuk setiap segmennya. Karena itu setiap
+sumber diuji sampai segmen pertama benar-benar datang, dan codecnya dibaca dari
+byte segmen itu, bukan dari tag.
+
+**2. Satu sumber sehat bisa muncul sebagai tiga tombol yang sama.** P1 mengirim
+tiga URL berbeda yang isinya identik: varian 640x266, 1280x534, dan 1920x800
+dengan bandwidth yang sama persis. Tanpa dedup, penonton disuruh menebak di
+antara tiga tombol yang hasilnya sama. Sidik jari diambil dari isi playlist
+(daftar resolusi, codec, jumlah segmen), bukan dari URL, karena URL selalu
+berbeda akibat token. Yang juga penting: kalau upstream tidak mengirim `quality`,
+labelnya diambil dari resolusi varian tertinggi, sehingga terbaca `1920x800`
+alih-alih tiga kali `auto`.
+
+**3. Rendisi `EXT-X-MEDIA:TYPE=SUBTITLES` bukan playlist.** Kesalahan di sini
+tidak kelihatan sebagai kesalahan subtitle, melainkan sebagai **kegagalan
+memutar video**: hls.js meminta berkas subtitle lewat jalur playlist, menerima
+502, lalu melaporkan pemutaran gagal padahal videonya sehat. Itu penyebab P5
+lama tampil `0x0` dengan ratusan segmen terunduh padahal datanya H.264 High yang
+bersih. Rendisi dibaca dari atribut `TYPE=` tag itu, dan berkas `.vtt`/`.srt`
+dilayani sebagai `text/vtt`, bukan diteruskan sebagai segmen mentah.
 
 ### Kenapa P5 hanya menyisakan 1 dari 11 sumber
 

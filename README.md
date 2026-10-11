@@ -109,6 +109,29 @@ lama tampil `0x0` dengan ratusan segmen terunduh padahal datanya H.264 High yang
 bersih. Rendisi dibaca dari atribut `TYPE=` tag itu, dan berkas `.vtt`/`.srt`
 dilayani sebagai `text/vtt`, bukan diteruskan sebagai segmen mentah.
 
+**4. Sebagian 404 dan 502 itu soal player, bukan soal judul.** Ditemukan pada
+`movie/1175161` (Agak Laen): P1 membalas `404 tidak ada sumber stream untuk movie
+1175161`, P9 membalas `502`, sementara P5 punya satu sumber hidup 720p. Halaman
+player semula memperlakukan 404 sebagai "judul tidak ditemukan" lalu berhenti,
+sehingga penonton menunggu tanpa akhir padahal tontonannya ada di server lain.
+Sekarang halaman player **mencoba player berikutnya** dengan urutan dari server
+(`nextPlayers`), mengingat mana yang sudah dicoba (`triedPlayers`), dan hanya
+berhenti pada `400` (parameter salah). Daftar player tidak disalin ke halaman,
+supaya tidak bisa perlahan tidak cocok dengan registri resolver yang asli.
+
+Dua cacat pendamping yang ikut ditemukan lewat pengujian:
+
+- `#EXT-X-MEDIA` yang tidak absolut (placeholder JW Player seperti `/video/error`)
+  pernah masuk ke jalur sumber P9 dan di-`urlopen` apa adanya, sehingga seluruh
+  permintaan mati dengan `unknown url type` dan terbaca sebagai 502. Sekarang
+  baris yang bukan URL absolut dibuang, dan penyidik sumber memperlakukannya
+  sebagai mati, bukan sebagai kesalahan server.
+- Uji UI menunggu durasi tetap (2 detik). Lewat tunnel, React belum selesai
+  dalam 2 detik dan uji melaporkan "halaman kosong" padahal halamannya sehat
+  (85 elemen, 37 poster termuat, 0 error JS, terbukti di lokal **dan** tunnel).
+  Uji sekarang menunggu jumlah elemen berhenti bertambah, dan setiap panggilan
+  CDP punya batas waktu supaya uji melapor alih-alih menggantung.
+
 ### Kenapa P5 hanya menyisakan 1 dari 11 sumber
 
 10 sumber sisanya **H.265 (HEVC)**, dibuktikan dengan `ffprobe` pada init

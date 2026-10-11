@@ -16,7 +16,7 @@
  * yang sudah gugur di sisi server tidak pernah sampai ke sini.
  */
 
-export function renderPlayerPage({ kind, id, season, episode, playerId, embed }) {
+export function renderPlayerPage({ kind, id, season, episode, playerId, embed, playerIds }) {
   const cfg = {
     kind: kind === 'tv' || kind === 'series' ? 'tv' : 'movie',
     id: String(id || ''),
@@ -25,6 +25,12 @@ export function renderPlayerPage({ kind, id, season, episode, playerId, embed })
     playerId: String(playerId || '5'),
     embed: !!embed,
   }
+  // Urutan player yang dicoba kalau yang diminta tidak punya sumber. Dikirim
+  // dari server supaya daftarnya hanya ada di satu tempat, bukan disalin ke
+  // halaman ini dan perlahan jadi tidak cocok dengan registri aslinya.
+  const urutan = Array.isArray(playerIds) && playerIds.length
+    ? playerIds.map(String)
+    : [cfg.playerId]
 
   return `<!doctype html>
 <html lang="id">
@@ -74,6 +80,7 @@ export function renderPlayerPage({ kind, id, season, episode, playerId, embed })
 <script src="/assets/hls.min.js"></script>
 <script>
 const CFG = ${JSON.stringify(cfg)};
+const DAFTAR_PLAYER = ${JSON.stringify(urutan)};
 const v = document.getElementById('v');
 const msg = document.getElementById('msg');
 const picks = document.getElementById('picks');
@@ -93,25 +100,63 @@ function say(text, isError) {
 function hide() { msg.style.display = 'none'; }
 
 async function load() {
-  try {
-    const q = new URLSearchParams({ k: CFG.kind, id: CFG.id, player: CFG.playerId });
-    if (CFG.season) q.set('season', CFG.season);
-    if (CFG.episode) q.set('episode', CFG.episode);
-    const r = await fetch('/data/sources?' + q.toString());
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || 'gagal memuat sumber');
-    list = (j.data && j.data.sources) || [];
-    if (j.data && j.data.title) label.textContent = j.data.title;
-    if (!list.length) {
-      say('Tidak ada sumber untuk judul ini yang bisa diputar di browser. ' +
-          'Coba pilih server lain di halaman tonton.', true);
+  // Player yang resolvernya tidak menghasilkan apa-apa bukan tempat berhenti.
+  // Kejadian nyata: untuk satu judul, P1 balas 404 dan P9 balas 502, sementara
+  // P5 justru punya sumber hidup. Kalau iframe menyerah di player pertama,
+  // penonton melihat "gagal" padahal tontonannya ada di tab sebelah.
+  //
+  // Urutan player datang dari server (nextPlayers), jadi tidak ada daftar
+  // salinan di sini yang bisa perlahan tidak cocok dengan registri aslinya.
+  let antre = [CFG.playerId];
+  const sudah = [];
+  const alasan = [];
+
+  while (antre.length) {
+    const pid = antre.shift();
+    sudah.push(pid);
+    try {
+      const q = new URLSearchParams({ k: CFG.kind, id: CFG.id, player: pid });
+      if (CFG.season) q.set('season', CFG.season);
+      if (CFG.episode) q.set('episode', CFG.episode);
+      // Player yang sudah dicoba dikirim balik supaya tidak diulang.
+      if (sudah.length > 1) q.set('p', sudah.join(','));
+      say('Menyelesaikan sumber…');
+      const r = await fetch('/data/sources?' + q.toString());
+      const j = await r.json();
+      if (!j.ok) {
+        // Hati-hati membedakan dua hal yang sama-sama 404:
+        //   - parameter salah          -> tidak ada gunanya coba player lain
+        //   - "player ini tidak punya  -> justru alasan untuk pindah ke player
+        //      sumber untuk judul ini"     berikutnya, judulnya sendiri ada
+        // Kejadian nyata: P1 balas 404 "tidak ada sumber stream untuk movie
+        // 1175161" sementara P5 punya sumber yang bisa diputar. Menganggapnya
+        // "judul tidak ditemukan" membuat penonton kehilangan tontonannya.
+        if (r.status === 400) {
+          return say('Permintaan ini tidak valid (' + (j.error || '') + ').', true);
+        }
+        alasan.push('server ' + pid + ': ' + (j.error || 'gagal'));
+        if (Array.isArray(j.nextPlayers) && j.nextPlayers.length) {
+          antre = j.nextPlayers.map(String);
+        }
+        continue;
+      }
+      const found = (j.data && j.data.sources) || [];
+      if (j.data && j.data.title) label.textContent = j.data.title;
+      if (!found.length) {
+        alasan.push('server ' + pid + ' tidak punya sumber hidup');
+        if (Array.isArray(j.nextPlayers)) antre = j.nextPlayers.map(String);
+        continue;
+      }
+      list = found;
+      renderPicks();
+      play(0);
       return;
+    } catch (err) {
+      alasan.push('server ' + pid + ': ' + err.message);
     }
-    renderPicks();
-    play(0);
-  } catch (err) {
-    say('Gagal menyelesaikan sumber: ' + err.message, true);
   }
+  say('Tidak ada sumber untuk judul ini yang bisa diputar di browser. ' +
+      'Sudah dicoba: ' + alasan.join('; ') + '. Coba server lain di halaman tonton.', true);
 }
 
 function renderPicks() {
@@ -210,6 +255,12 @@ function renderSubs() {
   };
 }
 
+// Pesan "Memuat …" harus hilang begitu gambar benar-benar datang. Tanpa
+// timeupdate di sini, penggantian sumber (mis. pindah player) meninggalkan
+// pesan itu di layar atas video yang sudah berjalan.
+v.addEventListener('timeupdate', function () {
+  if (v.currentTime > 0 && v.readyState >= 2) hide();
+});
 v.addEventListener('loadeddata', function () { started = true; hide(); });
 v.addEventListener('playing', hide);
 v.addEventListener('error', function () {

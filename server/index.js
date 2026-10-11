@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   home, browse, search, getGenres, getCountries, getYears, detail, stream,
-  resolveSources, StreamExError,
+  resolveSources, resolvablePlayerIds, StreamExError,
 } from './streamex.js'
 import { resolveSource, renderPlaylist, proxySegment, proxySubtitle, unb64url } from './media.js'
 import { renderPlayerPage } from './player.js'
@@ -214,6 +214,9 @@ async function handle(req, res) {
         episode: q.get('e') || '',
         playerId: q.get('p') || '5',
         embed: q.get('embed') === '1',
+        // Registri player yang punya resolver, dipakai halaman player untuk
+        // mencoba player lain kalau yang diminta tidak punya sumber hidup.
+        playerIds: resolvablePlayerIds(),
       })
       res.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
@@ -242,14 +245,36 @@ async function handle(req, res) {
     // Dipakai halaman player (/api/player) untuk mengambil daftar sumber yang
     // sudah lewat server, lengkap dengan playlist per sumber.
     if (p === '/data/sources') {
-      const data = await resolveSources({
-        kind: q.get('k') || 'movie',
-        id: q.get('id') || '',
-        season: q.get('season') || '',
-        episode: q.get('episode') || '',
-        playerId: q.get('player') || '5',
-      })
-      return setJson(res, 200, { ok: true, data })
+      // Player yang sudah dicoba (dari pemanggil) tidak perlu diulang lagi.
+      const sudah = new Set((q.get('p') || '').split(',').filter(Boolean))
+      const playerId = q.get('player') || '5'
+      sudah.add(String(playerId))
+      const sisa = resolvablePlayerIds().filter((n) => !sudah.has(String(n)))
+      try {
+        const data = await resolveSources({
+          kind: q.get('k') || 'movie',
+          id: q.get('id') || '',
+          season: q.get('season') || '',
+          episode: q.get('episode') || '',
+          playerId,
+        })
+        return setJson(res, 200, {
+          ok: true,
+          data,
+          nextPlayers: sisa,
+          triedPlayers: [...sudah],
+        })
+      } catch (err) {
+        // Sertakan juga saat GAGAL: halaman player perlu tahu ada player lain
+        // yang layak dicoba, dan mana saja yang sudah dicoba. Tanpa ini,
+        // kegagalan satu player terlihat seperti judulnya yang tidak ada.
+        return setJson(res, Number(err.status) || 502, {
+          ok: false,
+          error: err.message,
+          nextPlayers: sisa,
+          triedPlayers: [...sudah],
+        })
+      }
     }
 
     if (p === '/hls/seg') {

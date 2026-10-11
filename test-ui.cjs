@@ -111,11 +111,29 @@ async function main() {
     await sleep(waitMs)
   }
 
+  // React mengisi halaman setelah bundle-nya selesai; lewat tunnel itu bisa
+  // lebih dari 2 detik. Menunggu durasi tetap membuat uji melaporkan halaman
+  // kosong padahal cuma belum selesai. Tunggu sampai jumlah elemen berhenti
+  // bertambah, lalu periksa.
+  async function tungguStabil(minElemen = 20, maksDetik = 30) {
+    let prev = -1
+    let stabil = 0
+    for (let i = 0; i < maksDetik; i++) {
+      await sleep(1000)
+      const n = await evalJs('document.querySelectorAll("a,button").length')
+      if (n >= minElemen && n === prev) { stabil++; if (stabil >= 2) return n }
+      else stabil = 0
+      prev = n
+    }
+    return prev
+  }
+
   console.log('=== 1. halaman utama ===')
   await go('/')
-  await sleep(2000)
-  const homeCards = await evalJs('document.querySelectorAll("a,button").length')
+  const homeCards = await tungguStabil()
   check('home merender elemen', homeCards > 20, 'elemen=' + homeCards)
+  // Poster datang dari TMDB pihak ketiga; beri waktu sebelum menilai.
+  await sleep(3000)
   const homeImgs = await evalJs(
     'Array.from(document.querySelectorAll("img")).filter(i=>i.naturalWidth>0).length')
   check('poster TMDB benar-benar termuat', homeImgs > 3, 'gambar=' + homeImgs)
@@ -134,7 +152,12 @@ async function main() {
   console.log()
   console.log('=== 3. halaman tonton + iframe player ===')
   await go('/watch/' + encodeURIComponent('movie/550'))
-  await sleep(4000)   // resolver P1/P5/P9 butuh waktu
+  // Tunggu iframe benar-benar terpasang, jangan menebak durasi tetap.
+  for (let i = 0; i < 30; i++) {
+    await sleep(1000)
+    const ada = await evalJs('document.querySelectorAll("iframe").length')
+    if (ada > 0) break
+  }
   const iframes = await evalJs(
     'Array.from(document.querySelectorAll("iframe")).map(f=>f.src)')
   check('ada iframe player', Array.isArray(iframes) && iframes.length > 0,
@@ -149,6 +172,13 @@ async function main() {
 
   console.log()
   console.log('=== 4. isi iframe: video benar-benar jalan ===')
+  // Tunggu <video> muncul di dalam iframe.
+  for (let i = 0; i < 30; i++) {
+    await sleep(1000)
+    const ada = await evalJs(
+      '!!(document.querySelector("iframe")||{}).contentDocument?.querySelector("video")')
+    if (ada) break
+  }
   // iframe-nya same-origin, jadi keberadaannya diperiksa lewat contentDocument:
   // kalau dokumennya terbaca, iframe benar-benar terpasang dan bisa diperiksa.
   const frameInfo = await evalJs(`(() => {

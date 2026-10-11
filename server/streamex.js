@@ -31,6 +31,17 @@ const PLAYER_LABEL = {
   9: 'xpass',
 }
 
+/**
+ * Player yang punya resolver, dalam urutan yang masuk akal untuk dicoba.
+ *
+ * Daftarnya di sini, bukan disalin ke halaman player, supaya menambah resolver
+ * baru cukup di satu tempat. Player yang tidak ada di sini tidak punya resolver
+ * sama sekali, jadi mencobanya cuma membuang waktu penonton.
+ */
+export function resolvablePlayerIds() {
+  return Object.keys(PLAYER_LABEL).map(Number)
+}
+
 export class StreamExError extends Error {
   constructor(message, status) {
     super(message)

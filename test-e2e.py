@@ -3,7 +3,8 @@ import json
 import re
 import urllib.request
 
-BASE = "http://127.0.0.1:8801"
+import os
+BASE = os.environ.get("BASE", "http://127.0.0.1:8801")
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"}
 ok = 0

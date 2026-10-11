@@ -208,8 +208,11 @@ async function main() {
   check('tidak ada permintaan yang gagal', realFails.length === 0,
         realFails.slice(0, 3).join(' ;; '))
   if (failedRequests.length && !realFails.length) {
+    // Selalu tampilkan URL-nya, bukan cuma jumlahnya: menyaring tanpa melihat
+    // apa yang disaring itu cara paling mudah menyembunyikan bug nyata.
     console.log('    (diabaikan, pembatalan yang disengaja:',
                 failedRequests.length, 'permintaan)')
+    failedRequests.slice(0, 5).forEach((f) => console.log('      -', f))
   }
 
   console.log()

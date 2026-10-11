@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# logs
+*.log
+server.log
+
+# env / rahasia
+.env
+.env.*
+*.key
+*.pem
+
+# hasil pemeriksaan sementara
+diag-*.py
+dbg.cjs
+test-raw-vs-proxy.cjs
